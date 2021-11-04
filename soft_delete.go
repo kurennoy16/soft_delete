@@ -8,9 +8,20 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-type DeletedAt uint
+type IsDeleted bool
 
-func (DeletedAt) QueryClauses(f *schema.Field) []clause.Interface {
+func (i *IsDeleted) Scan(value interface{}) error {
+	var state bool
+	if value == 0 {
+		i = (*IsDeleted)(&state)
+		return nil
+	}
+	state = true
+	i = (*IsDeleted)(&state)
+	return nil
+}
+
+func (IsDeleted) QueryClauses(f *schema.Field) []clause.Interface {
 	return []clause.Interface{SoftDeleteQueryClause{Field: f}}
 }
 
@@ -49,40 +60,28 @@ func (sd SoftDeleteQueryClause) ModifyStatement(stmt *gorm.Statement) {
 			}})
 		} else {
 			stmt.AddClause(clause.Where{Exprs: []clause.Expression{
-				clause.Eq{Column: clause.Column{Table: clause.CurrentTable, Name: sd.Field.DBName}, Value: 0},
+				clause.Eq{Column: clause.Column{Table: clause.CurrentTable, Name: sd.Field.DBName}, Value: false},
 			}})
 		}
 		stmt.Clauses["soft_delete_enabled"] = clause.Clause{}
 	}
 }
 
-func (DeletedAt) DeleteClauses(f *schema.Field) []clause.Interface {
-	settings := schema.ParseTagSetting(f.TagSettings["SOFTDELETE"], ",")
+func (IsDeleted) DeleteClauses(f *schema.Field) []clause.Interface {
 	softDeleteClause := SoftDeleteDeleteClause{
-		Field:    f,
-		Flag:     settings["FLAG"] != "",
-		TimeType: schema.UnixSecond,
+		Field: f,
 	}
 
-	// flag is much more priority
-	if !softDeleteClause.Flag {
-		if settings["NANO"] != "" {
-			softDeleteClause.TimeType = schema.UnixNanosecond
-		} else if settings["MILLI"] != "" {
-			softDeleteClause.TimeType = schema.UnixMillisecond
-		} else {
-			softDeleteClause.TimeType = schema.UnixSecond
-		}
-	}
+	deletedAtFieldName, ok := f.TagSettings["DELETEDATFIELD"]
+	if ok && len(deletedAtFieldName) > 0 { // DeletedAtField
+		softDeleteClause.DeleteAtField = f.Schema.LookUpField(deletedAtFieldName)
 
-	if v := settings["DELETEDATFIELD"]; v != "" { // DeletedAtField
-		softDeleteClause.DeleteAtField = f.Schema.LookUpField(v)
 	}
 
 	return []clause.Interface{softDeleteClause}
 }
 
-func (DeletedAt) UpdateClauses(f *schema.Field) []clause.Interface {
+func (IsDeleted) UpdateClauses(f *schema.Field) []clause.Interface {
 	return []clause.Interface{SoftDeleteUpdateClause{Field: f}}
 }
 
@@ -110,8 +109,6 @@ func (sd SoftDeleteUpdateClause) ModifyStatement(stmt *gorm.Statement) {
 
 type SoftDeleteDeleteClause struct {
 	Field         *schema.Field
-	Flag          bool
-	TimeType      schema.TimeType
 	DeleteAtField *schema.Field
 }
 
@@ -128,28 +125,16 @@ func (sd SoftDeleteDeleteClause) MergeClause(*clause.Clause) {
 func (sd SoftDeleteDeleteClause) ModifyStatement(stmt *gorm.Statement) {
 	if stmt.SQL.String() == "" {
 		curTime := stmt.DB.NowFunc()
-		if sd.Flag {
-			set := clause.Set{{Column: clause.Column{Name: sd.Field.DBName}, Value: 1}}
-			stmt.SetColumn(sd.Field.DBName, 1, true)
 
-			if sd.DeleteAtField != nil {
-				set = append(set, clause.Assignment{Column: clause.Column{Name: sd.DeleteAtField.DBName}, Value: curTime.Unix()})
-				stmt.SetColumn(sd.DeleteAtField.DBName, curTime, true)
-			}
+		set := clause.Set{{Column: clause.Column{Name: sd.Field.DBName}, Value: true}}
+		stmt.SetColumn(sd.Field.DBName, true, true)
 
-			stmt.AddClause(set)
-		} else {
-			var curUnix int64 = 0
-			if sd.TimeType == schema.UnixNanosecond {
-				curUnix = curTime.UnixNano()
-			} else if sd.TimeType == schema.UnixMillisecond {
-				curUnix = curTime.UnixNano() / 1e6
-			} else {
-				curUnix = curTime.Unix()
-			}
-			stmt.AddClause(clause.Set{{Column: clause.Column{Name: sd.Field.DBName}, Value: curUnix}})
-			stmt.SetColumn(sd.Field.DBName, curUnix, true)
+		if sd.DeleteAtField != nil {
+			set = append(set, clause.Assignment{Column: clause.Column{Name: sd.DeleteAtField.DBName}, Value: curTime.Unix()})
+			stmt.SetColumn(sd.DeleteAtField.DBName, curTime, true)
 		}
+
+		stmt.AddClause(set)
 
 		if stmt.Schema != nil {
 			_, queryValues := schema.GetIdentityFieldValuesMap(stmt.ReflectValue, stmt.Schema.PrimaryFields)
