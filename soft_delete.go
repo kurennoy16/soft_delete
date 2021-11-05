@@ -130,7 +130,7 @@ func (sd SoftDeleteDeleteClause) ModifyStatement(stmt *gorm.Statement) {
 		stmt.SetColumn(sd.Field.DBName, true, true)
 
 		if sd.DeleteAtField != nil {
-			set = append(set, clause.Assignment{Column: clause.Column{Name: sd.DeleteAtField.DBName}, Value: curTime.Unix()})
+			set = append(set, clause.Assignment{Column: clause.Column{Name: sd.DeleteAtField.DBName}, Value: curTime})
 			stmt.SetColumn(sd.DeleteAtField.DBName, curTime, true)
 		}
 
