@@ -1,6 +1,7 @@
 package soft_delete
 
 import (
+	"errors"
 	"reflect"
 
 	"gorm.io/gorm"
@@ -11,13 +12,15 @@ import (
 type IsDeleted bool
 
 func (i *IsDeleted) Scan(value interface{}) error {
-	var state bool
-	if value == 0 {
-		i = (*IsDeleted)(&state)
-		return nil
+	if i == nil {
+		return errors.New("value must be initialized (*IsDeleted)(nil)")
 	}
-	state = true
-	i = (*IsDeleted)(&state)
+
+	*i = false
+	if value == true {
+		*i = true
+	}
+
 	return nil
 }
 
